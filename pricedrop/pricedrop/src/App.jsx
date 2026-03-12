@@ -319,7 +319,25 @@ function App() {
 
   const displayName = profile?.name || user?.user_metadata?.name || user?.email?.split("@")[0] || "there";
 
-  useEffect(()=>{loadItems();},[user]);
+  useEffect(()=>{
+    loadItems();
+    // Handle Stripe success redirect
+    const params = new URLSearchParams(window.location.search);
+    if(params.get("success")==="true") {
+      const itemId = params.get("itemId");
+      if(itemId) {
+        supabase.from("items").update({status:"claimed"}).eq("id",itemId).then(()=>{
+          loadItems();
+          window.history.replaceState({},"",window.location.pathname);
+          setTimeout(()=>showToast("💸 Payment confirmed! Refund claimed successfully!"),800);
+        });
+      }
+    }
+    if(params.get("cancelled")==="true") {
+      window.history.replaceState({},"",window.location.pathname);
+      setTimeout(()=>showToast("↩ Payment cancelled"),500);
+    }
+  },[user]);
 
   async function loadItems() {
     if(!user) return;
@@ -340,11 +358,17 @@ function App() {
 
   async function claimRefund(id) {
     const item=items.find(i=>i.id===id);
-    const {error}=await supabase.from("items").update({status:"claimed"}).eq("id",id);
-    if(error){showToast("❌ Error claiming refund");return;}
-    setItems(prev=>prev.map(i=>i.id===id?{...i,status:"claimed"}:i));
-    showToast(`💸 Refund of $${fmt(item.refund_amount)} claimed! You earned $${fmt(item.my_earning)}`);
-    go("dashboard");
+    showToast("⏳ Opening payment…");
+    try {
+      const res = await fetch("/api/create-checkout", {
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({itemId:item.id,itemName:item.name,refundAmount:item.refund_amount,myEarning:item.my_earning,userId:user.id})
+      });
+      const data = await res.json();
+      if(data.url) { window.location.href = data.url; return; }
+      showToast("❌ Payment error: "+data.error);
+    } catch(e) { showToast("❌ "+e.message); }
   }
 
   async function addItemFn() {
